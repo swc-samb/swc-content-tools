@@ -49,12 +49,16 @@ def stringList(array, separator="*", tab=0):
     separatorString = f"\n{'    ' * tab}{separator}"
     return "".join(stringList(x, separator, tab+1) if is_iterable(x) else separatorString + str(x) for x in array)
 
-
-def deleteRig(rig):
-    check = pm.ls(rig)
-    if not check:
-        return
+def deleteRigOld(rig):
+    """
+    This is the OLD delete rig function. We check the version number on rigs and if it is one
+    which was built prior to the network node update to EvoRig, use this delete function. New rigs
+    can utilize the safer deleteRig function which only removed nodes that are connected to the rig.
     
+    :param pm.nt.Transform rig: Rig group for the rig being removed 
+
+    """
+
     # Delete blendColor nodes and unused node
     blendColor_nodes = pm.ls(type="blendColors")
     for node in blendColor_nodes:
@@ -62,8 +66,95 @@ def deleteRig(rig):
     curve_info_nodes = pm.ls(type='curveInfo')   # need to delete curveInfo node before deleting the rig to fix no valid NURBS curve bug when deleting rig/re-gen
     if curve_info_nodes:
         pm.delete(curve_info_nodes)
+    clamp_nodes = pm.ls(type='clamp')
+    pm.delete(clamp_nodes)
+
+    # Zero out face controls
+    face_rig_ctrls = [x for x in pm.ls(type=pm.nt.Transform) if x.hasAttr('faceCtrl')]
+    for face_ctrl in face_rig_ctrls:
+        for attr_name in ['tx', 'ty', 'tz', 'rx', 'ry', 'rz']:
+            attr = pm.PyNode(f'{face_ctrl}.{attr_name}')
+            if attr.isKeyable() and not attr.isLocked() and not attr.isConnected():
+                attr.set(0)
+    
+    # Delete rig grp and ensure joints are 1.0 scale
     pm.delete(rig)
+    joints = pm.ls(type=pm.nt.Joint)
+    for jnt in joints:
+        for attr in ['sx', 'sy', 'sz']:
+            pm.setAttr(f'{jnt}.{attr}', 1)
+
+    # Clean up other rig nodes that may have hung around
+    remap_nodes = pm.ls(type='remapValue')
+    sub_nodes = pm.ls(type='subtract')
+    pm.delete(remap_nodes+sub_nodes)
+
     pm.mel.MLdeleteUnused()
+
+
+def deleteRig(rig):
+    """
+    This is the CURRENT delete rig function. It uses the rig network nodes to determine
+    which nodes to remove. This should always be used over deleteRigOld unless the rig was built
+    on EvoRig version prior to 1.15.0 because deleteRigOld can remove nodes not related to the rig
+    
+    :param pm.nt.Transform rig: Rig group for the rig being removed 
+    
+    """
+
+    if isinstance(rig, list):
+        rig = rig[0]
+
+    check = pm.ls(rig)
+    if not check:
+        return
+    
+    rigVersion = pm.getAttr(f'{rig}.evoRigVersion')
+    oldRig = False if tuple(map(int, rigVersion.split('.'))) >= (1, 15, 0) else True
+    if oldRig:
+        deleteRigOld(rig)
+        return     
+
+    rigJoints = []
+    rigNetworkName = f'{rig}_Network'
+    trashNodes = []
+    if pm.objExists(rigNetworkName):
+        rigNetwork = pm.PyNode(rigNetworkName)
+        bc_nodes = getConnectedFromMulti(rigNetwork, 'blendColors')
+        trashNodes += bc_nodes
+
+        moduleNetworks = rigNetwork.modules.get()
+        for moduleNetwork in moduleNetworks:
+            connectedNodes = getConnectedFromMulti(moduleNetwork)
+            trashNodes += [x for x in connectedNodes if not isinstance(x, pm.nt.Joint)]
+            rigJoints += moduleNetwork.joints.get()
+
+            if moduleNetwork.moduleClass.get() == 'MakeFace.faceCtrl':
+                # Zero out face controls
+                faceControls = moduleNetwork.controls.get()
+                for faceControl in faceControls:
+                    for attrName in ['tx', 'ty', 'tz', 'rx', 'ry', 'rz']:
+                        attr = pm.PyNode(f'{faceControl}.{attrName}')
+                        if attr.isKeyable() and not attr.isLocked() and not attr.isConnected():
+                            attr.set(0)
+            trashNodes.append(moduleNetwork)
+
+    # Remove rig nodes 
+    pm.delete(trashNodes)
+
+                
+    # Delete rig grp 
+    pm.delete(rig)
+
+    # Additional garbage cleanup 
+    pm.mel.MLdeleteUnused()
+
+    # Make sure joints are 1.0 scale (deleting some rig nodes that affect scale may set them to 0)
+    for rigJoint in rigJoints:
+        for attrName in ['sx', 'sz', 'sy']:
+            attr = pm.PyNode(f'{rigJoint}.{attrName}')
+            if attr.isKeyable() and not attr.isLocked() and not attr.isConnected():
+                attr.set(1)   
 
 
 
@@ -107,6 +198,92 @@ def getRigJoint(node=None):
 
     return node
 
+def selectJointsForRig_cmd():
+    selectedRig = pm.selected()
+    if not selectedRig or not selectedRig[0].hasAttr('mainNetwork'):
+        rigGrps = [x for x in pm.ls(type=pm.nt.Transform) if x.hasAttr('mainNetwork')]
+        if rigGrps:
+            selectedRig = rigGrps[0]
+        else:
+            pm.warning('No rigs found in the scene')
+            return
+    else:
+        selectedRig = selectedRig[0]
+    networkNode = selectedRig.mainNetwork.get()
+    rigJnts = getJointsForRig(networkNode)
+    pm.select(rigJnts, r=True)
+
+
+def getJointsForRig(networkNode):
+    rigJnts = []
+    for m in networkNode.modules.get():
+        jnts = m.joints.get()
+        rigJnts += jnts
+    return rigJnts
+
+def getConnectedFromMulti(node, attr=None):
+    """
+    Returns nodes connection to a multi attr on the given node 
+    
+    :param pm.PyNode node: Node whose connections we will check
+    :param str attr: Multi attr to check for connections on 
+    
+    """
+
+    node = pm.PyNode(node)
+    out = []
+    if attr:
+        if not node.hasAttr(attr):
+            return []
+
+        plug = node.attr(attr)
+
+        for i in sorted(plug.getArrayIndices()):
+            con = plug[i].listConnections(s=0, d=1)
+            if con:
+                out.append(con[0])
+    else:
+        multiAttrs = [a for a in node.listAttr(multi=True, userDefined=True)]
+        for multiAttr in multiAttrs:
+            connectedNode = multiAttr.listConnections(s=0, d=1)
+            if connectedNode:
+                out.append(connectedNode[0])
+
+    return out
+
+def connectMessage(src, srcAttr, targets, dstAttr="parentComponent"):
+    """
+    Connects message attrs between nodes
+    
+    :param pm.PyNode src: Source node from which will come the connection
+    :param str srcAttr: Source attribute from which will come the connection
+    :param list(pm.PyNode) targets: List of target nodes to receive connection
+    :param str dstAttr: Destination attribute to receive connection
+
+    """
+
+    src = pm.PyNode(src)
+    if not src.hasAttr(srcAttr):
+        src.addAttr(srcAttr, at="message", multi=True)
+
+    plug = src.attr(srcAttr)
+
+    if not isinstance(targets, (list, tuple, set)):
+        targets = [targets]
+
+    existing = set(plug.listConnections(s=True, d=False))
+
+    for tgt in targets:
+        tgt = pm.PyNode(tgt)
+
+        if not tgt.hasAttr(dstAttr):
+            tgt.addAttr(dstAttr, at="message")
+
+        if tgt in existing:
+            continue
+
+        plug[plug.numElements()].connect(tgt.attr(dstAttr), force=True)
+        existing.add(tgt)
 
 def is_iterable(value):
     '''python 3 strings are iterables (for the love of all thats holy why?!) so old iterable checks no longer work *sigh*'''
@@ -211,7 +388,7 @@ def node_from_string(item):
 def getSwitchEnumNames(SpaceSwitcherJoints, nameDetailLevel, nameDetailStart=0):
     namelist = []
     for i, jnt in enumerate(SpaceSwitcherJoints):
-        # printdebug(jnt)
+
         nametempsplit = jnt.name().split("_")
         if (len(nametempsplit) >= nameDetailLevel):
             nametemp = nametempsplit[nameDetailStart:nameDetailLevel]
@@ -280,7 +457,6 @@ def setupSpaceSwitch(ctrl,
         setupSpaceBlending(ctrl, localSpaceSwitcherJoints, spaceBlends)
         setupSpaceOffsets(ctrl)
         return
-
     switchEnumNames = getSwitchEnumNames(localSpaceSwitcherJoints, nameDetailLevel, nameDetailStart)
     inh = ctrl
     while inheritParentLevel > 0:
@@ -408,21 +584,24 @@ def findInChainOld(parentjnt, findname, chain=None):
 
 def findAllInChain(parentjnt, findname, allDescendents=True, disableWarning=False):
     '''find all joints matching findname checks ls syntax first then regular expression if that fails'''
-    chain = (parentjnt.listRelatives(ad=allDescendents, type='joint') or []) + [parentjnt]
+    if isinstance(parentjnt, str):
+        parentjnt = pm.PyNode(parentjnt)
+    if pm.objExists(parentjnt):
+        chain = (parentjnt.listRelatives(ad=allDescendents, type='joint') or []) + [parentjnt]
 
-    # check ls
-    jnts = list(set([x for x in pm.ls(findname, '*' + findname, findname + '*', '*' + findname + '*', type='joint') if x in chain]))
-    if jnts:
-        hisort = lambda x:len(x.longName().split('|'))
-        return sorted(jnts, key=hisort)
+        # check ls
+        jnts = list(set([x for x in pm.ls(findname, '*' + findname, findname + '*', '*' + findname + '*', type='joint') if x in chain]))
+        if jnts:
+            hisort = lambda x:len(x.longName().split('|'))
+            return sorted(jnts, key=hisort)
 
-    # check regex
-    jnts = [x for x in reversed(chain) if re.findall(findname, str(x.name()).split('|')[-1], re.IGNORECASE)]
-    if jnts:
-        return jnts
+        # check regex
+        jnts = [x for x in reversed(chain) if re.findall(findname, str(x.name()).split('|')[-1], re.IGNORECASE)]
+        if jnts:
+            return jnts
 
-    if not disableWarning:
-        pm.warning('Joint not found in hierarchy: ' + findname + "  joint chain: " + str(chain))
+        if not disableWarning:
+            pm.warning('Joint not found in hierarchy: ' + findname + "  joint chain: " + str(chain))
 
 
 # ethanm - old version of function had odd behavior, would return parent objects if duplicate named objects existed.
@@ -914,6 +1093,16 @@ def makeControl(sobj, newscale, constrainObj=None, parentObj=None, pivotObj=None
 
     return pmposctrl, InhGrp
 
+def getMayaSafeName(moduleName):
+    """
+    Removes bad characters from module labels to create a display name that can be used in Maya
+    
+    :param str moduleName: Name of the module to create a display version for
+
+    """
+
+    niceName = re.sub(r"[^\w]", "_", moduleName)
+    return niceName
 
 def getNiceControllerName(jointName="joint", suffix=""):
     # printdebug("  getNiceControllerName jointName: "+ str(jointName) + '  ' + suffix)

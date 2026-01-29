@@ -32,7 +32,7 @@ global proc shelf_wildcardModding () {
         -image "HumanBody.png" 
         -image1 "HumanBody.png" 
         -style "iconOnly" 
-        -marginWidth 1
+        -marginWidth 0
         -marginHeight 1
         -command "#Export selected mesh or meshes and their associated skeleton only.\n\nfrom wildcardUtils.systemUtils import reload\nfrom wildcardRig.EvoRig import wc_EvoRigExporter as ex; reload(ex);\nex.export_rig()" 
         -sourceType "python" 
@@ -67,7 +67,7 @@ global proc shelf_wildcardModding () {
         -image "subdivPolyMode.png" 
         -image1 "subdivPolyMode.png" 
         -style "iconOnly" 
-        -marginWidth 1
+        -marginWidth 0
         -marginHeight 1
         -command "#Export selected static nanite meshes into subfolders\n\nfrom wildcardUtils.systemUtils import reload\nfrom wildcardModel import export_static_mesh_fbx as ex; reload(ex);\nex.export_nanite_fbx()" 
         -sourceType "python" 
@@ -102,7 +102,7 @@ global proc shelf_wildcardModding () {
         -image "poseEditor.png" 
         -image1 "poseEditor.png" 
         -style "iconOnly" 
-        -marginWidth 1
+        -marginWidth 0
         -marginHeight 1
         -command "# Evo Rig UI\n\nimport os\nfrom wildcardUtils.systemUtils import reload\nfrom wildcardUtils.systemUtils import delete_python_cache\nfrom wildcardRig.EvoRig import wc_EvoRig\ndelete_python_cache(os.path.dirname(wc_EvoRig.__file__))\nreload(wc_EvoRig)\n\nwc_EvoRig.removeWindows()\nwc_EvoRig.AutoRigUI() " 
         -sourceType "python" 
@@ -150,7 +150,7 @@ global proc shelf_wildcardModding () {
         -image "animPrefsWndIcon.png" 
         -image1 "animPrefsWndIcon.png" 
         -style "iconOnly" 
-        -marginWidth 1
+        -marginWidth 0
         -marginHeight 1
         -command "# Anim Export UI\nfrom wildcardUtils.systemUtils import reload\nfrom wildcardAnim import arkAnimExporterUI as ae; reload(ae);\nae.AnimExporterUI()" 
         -sourceType "python" 
@@ -185,7 +185,7 @@ global proc shelf_wildcardModding () {
         -image "mirrorSkinWeight.png" 
         -image1 "mirrorSkinWeight.png" 
         -style "iconOnly" 
-        -marginWidth 1
+        -marginWidth 0
         -marginHeight 1
         -command "# Mirror Animation Tool\n\nfrom wildcardUtils.systemUtils import reload\nfrom wildcardAnim import mb_MirrorAnimation\nreload(mb_MirrorAnimation)\nmb_MirrorAnimation.makeWindow()" 
         -sourceType "python" 
@@ -220,7 +220,7 @@ global proc shelf_wildcardModding () {
         -image "bifrostShape.svg" 
         -image1 "bifrostShape.svg" 
         -style "iconOnly" 
-        -marginWidth 1
+        -marginWidth 0
         -marginHeight 1
         -command "from wildcardUtils.systemUtils import reload\nfrom wildcardAnim import EvoRigIKFKSwitch\nreload(EvoRigIKFKSwitch)\nEvoRigIKFKSwitch.ikfk_switch_cmd()" 
         -sourceType "python" 
@@ -255,7 +255,7 @@ global proc shelf_wildcardModding () {
         -image "bifrostCompound.svg" 
         -image1 "bifrostCompound.svg" 
         -style "iconOnly" 
-        -marginWidth 1
+        -marginWidth 0
         -marginHeight 1
         -command "from wildcardUtils.systemUtils import reload\nfrom wildcardAnim import spaceSwitching\nreload(spaceSwitching)\n\nspaceSwitching.main()" 
         -sourceType "python" 

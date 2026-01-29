@@ -66,11 +66,17 @@ import mb_MirrorAnimation as mirror
 reload(mirror)
 import cr_MakeEngineIK
 reload(cr_MakeEngineIK)
+import MakeFace
+reload(MakeFace)
+import MakeRoot
+reload(MakeRoot)
+import mb_MakeAdditiveSpline
+reload(mb_MakeAdditiveSpline)
 
 util.debugging = True
 
 __author__ = 'Michael Buettner, Ethan McCaughey, Corey Ross, Mic Marvin, Jessica Tung'
-__version__ = '1.14.123'  # <major>.<minor>.<revision>
+__version__ = '1.15.0'  # <major>.<minor>.<revision>
 rigControlSizeSlider = "rigControlSizeSlider"
 splineCountSlider = "splineCountSlider"
 
@@ -88,6 +94,30 @@ fileName = fileNameSplit[1]
 def removeWindows():
     if (cmds.window(windowName + str(0), exists=True)):
         cmds.deleteUI(windowName + str(0))
+
+def dockableAutoRig():
+    dockControl = 'EvoRigUI'
+
+    if cmds.workspaceControl(dockControl, exists=True):
+        cmds.deleteUI(dockControl, control=True)
+
+    dock = cmds.workspaceControl(
+        dockControl,
+        label='EvoRig',
+        retain=False,
+        floating=True,
+        initialWidth=420,
+        initialHeight=700
+    )
+
+    ui = AutoRigUI()
+    ui.window = dock
+    ui.mainLayout = None
+    ui.dynamicLayout = None
+    ui.initLayout()        
+    ui.loadFromSceneSettings()
+
+    return ui
 
 
 class AutoRigUI(object):
@@ -137,8 +167,7 @@ class AutoRigUI(object):
         self.textFieldBoneModInfo = None
         self.collapsed = {}
 
-        self.makeWindow()
-        self.loadFromSceneSettings()
+
 
     @property
     def defaultSettingsPath(self):
@@ -272,7 +301,7 @@ class AutoRigUI(object):
         self.scrollLayout = pm.scrollLayout(height=700, parent=mainColumn)
 
         self.initDynamicLayout()
-
+    
         # ------------------- Control Layers ---------------------------------------------
         layoutFrameControlLayers = pm.frameLayout("layoutFrameControlLayers",
                                                   label="Control Layers",
@@ -919,16 +948,17 @@ class AutoRigUI(object):
         for constraint in constraint_list:
             lastString = constraint.rfind('_')
             jntName = constraint[:lastString]
-            
-            if 'point' in constraint.name() or 'orient' in constraint.name():
-                pm.connectAttr(mainCtrl.name() + '.boneModSkeleton', constraint.name() + f".{jntName}_OffsetJntW1")
-                reverse_node = pm.createNode('reverse',n=f"{jntName}_RVS")
-                pm.connectAttr(mainCtrl.name() + '.boneModSkeleton', reverse_node.name() + '.input.inputX')
-                pm.connectAttr(reverse_node.name() + '.output.outputX', constraint.name() + f".{jntName}_RigJntW0")
-            else:
-                pass 
+            if not 'FACIAL_' in jntName:
+                if 'point' in constraint.name() or 'orient' in constraint.name():
+                    pm.connectAttr(mainCtrl.name() + '.boneModSkeleton', constraint.name() + f".{jntName}_OffsetJntW1")
+                    reverse_node = pm.createNode('reverse',n=f"{jntName}_RVS")
+                    pm.connectAttr(mainCtrl.name() + '.boneModSkeleton', reverse_node.name() + '.input.inputX')
+                    pm.connectAttr(reverse_node.name() + '.output.outputX', constraint.name() + f".{jntName}_RigJntW0")
+                else:
+                    pass 
         
-        offsetJntList = offsetJntList[1:]       
+        offsetJntList = offsetJntList[1:]  
+        bcNodes = []     
         # get correct scale data from boneMod by useing blendColor instead of scaleConstraint
         for offsetjnt in offsetJntList:
             lastString = offsetjnt.rfind('_')
@@ -937,6 +967,7 @@ class AutoRigUI(object):
             if len(connectedScale) == 0:
                 #print ('forBlendColor:' + jntName)
                 offsetJntBC = pm.shadingNode('blendColors', asUtility = True, n = offsetjnt + '_scale_BC')
+                bcNodes.append(offsetJntBC)
                 pm.setAttr(offsetJntBC + '.color2R', 1)
                 pm.setAttr(offsetJntBC + '.color2G', 1)
                 pm.connectAttr(offsetjnt + '.scale', offsetJntBC.name() + '.color1')
@@ -946,13 +977,15 @@ class AutoRigUI(object):
             if len(connectedScale) > 0 and "CON" in connectedScale:
                 #print ('forBlendColor:' + jntName)
                 offsetJntBC = pm.shadingNode('blendColors', asUtility = True, n = offsetjnt + '_scale_BC')
+                bcNodes.append(offsetJntBC)
                 pm.connectAttr(offsetjnt.replace('OffsetJnt','CON') + '.scale', offsetJntBC.name() + '.color2')
                 pm.connectAttr(offsetjnt + '.scale', offsetJntBC.name() + '.color1')
                 pm.connectAttr(mainCtrl.name() + '.boneModSkeleton', offsetJntBC.name() + '.blender')
                 pm.disconnectAttr(offsetjnt.replace('OffsetJnt','CON') + '.scale', jntName + '.scale')
                 pm.connectAttr(offsetJntBC.name() + '.output', jntName + '.scale')
            
-            
+        util.connectMessage(self.getRigNetwork(), 'blendColors', bcNodes)
+
     def saveSettings(self):
 
         self.boneModInfo = cmds.scrollField(self.textFieldBoneModInfo, query=True, text=True)
@@ -986,7 +1019,6 @@ class AutoRigUI(object):
                         values = str(values)
 
                     modAttrs[str(key)] = (values)
-
             settings.append([modName, modAttrs])
 
         try:
@@ -1028,7 +1060,7 @@ class AutoRigUI(object):
         # initialize layout
         self.modules = [self.moduleTypes['Additive IK Spline'](keyword='spine', _expanded=True)]
 
-        self.makeWindow()
+        #self.makeWindow()
         self.updateUI()
 
     def loadSettings(self):
@@ -1082,7 +1114,7 @@ class AutoRigUI(object):
         # initialize layout
         self.modules = loadModules
 
-        self.makeWindow()
+        #self.makeWindow()
         self.updateUI()
 
         print('Settings Loaded: "' + self.uiPath + '"')
@@ -1151,95 +1183,6 @@ class AutoRigUI(object):
             if node and not (node in omitted):
                 item.setData(node)
 
-    def createRootControl(self, root, exportRoot, hipJnt, group, conScale, SpaceSwitcherJoints):
-
-        # Set up space switchers
-        localSpaceSwitcherJoints = SpaceSwitcherJoints[0:3]
-
-        rootMotionJnt = pm.joint(root, name='rootmotion_RigJnt')
-        translationconnections = pm.listConnections(exportRoot.name() + ".tx", d=False, s=True)
-        for i in translationconnections:
-            pm.delete(i)
-        rotationconnnections = pm.listConnections(exportRoot.name() + ".rx", d=False, s=True)
-        for i in rotationconnnections:
-            pm.delete(i)
-
-        pm.parentConstraint(rootMotionJnt, exportRoot, mo=True)
-
-        groundPlaneControl = None
-        jointXform = pm.xform(root, q=True, ws=True, rp=True)
-        groundPlaneTarget = pm.createNode('transform', n=root.name() + '_groundPlane' + '_Target')
-        pm.xform(groundPlaneTarget, ws=True, t=jointXform)
-        pm.setAttr(groundPlaneTarget.name() + '.translate' + pm.upAxis(q=True, axis=True).upper(), 0)
-
-        groundPlaneAdjustGrp = pm.group(groundPlaneTarget, name=util.getNiceControllerName(groundPlaneTarget.name()).replace("_Target", ""))
-        if group:
-            pm.parent(groundPlaneAdjustGrp, group)
-
-        groundPlanePreProjection = pm.createNode('transform', n=root.name() + '_groundPlanePreProjection', parent=root)
-        pm.parent(groundPlanePreProjection, groundPlaneAdjustGrp)
-
-        groundPlaneControl = util.getGroundPlaneControl(root, group, conScale)
-
-        pm.parentConstraint(groundPlaneControl, groundPlaneAdjustGrp, mo=True)
-
-        # Parent constrain node to joint so it stays centered when rotating
-        pm.pointConstraint(hipJnt, groundPlanePreProjection, mo=True)
-        # Point constrain the groundPlaneTarget, which is located on the ground plane. Skip the up-Axis
-        pm.pointConstraint(groundPlanePreProjection, groundPlaneTarget, mo=True, skip=pm.upAxis(q=True, axis=True).lower())
-        # pm.orientConstraint(hipJnt, groundPlaneTarget, mo=False).setAttr('interpType', util.DEFAULT_INTERPTYPE)
-
-        rootControl, ikGrp = util.makeControl(rootMotionJnt, conScale, constrainObj=rootMotionJnt, worldOrient=True, shape=12,
-                                              controlSuffix='_CON')  # parentObj=joint
-        pm.parent(ikGrp, group)
-        util.setRGBColor(rootControl, color=(1.0, 0.0, 0.5))
-
-        util.setupSpaceSwitch(rootControl,
-                              localSpaceSwitcherJoints,
-                              nameDetailLevel=4,
-                              nameDetailStart=0,
-                              spaceBlends=None)
-        rootControl.setAttr("space", 2)
-
-        ikControlParent = rootControl.getParent()
-        groundPlaneSwitchGrp = pm.group(rootControl, n=rootControl.name() + '_GroundPlane_Grp')
-        groundPlaneConstraint = pm.parentConstraint([ikControlParent, groundPlaneTarget], groundPlaneSwitchGrp, mo=True, skipRotate=["x", "y", "z"])
-        groundPlaneConstraint.setAttr('interpType', util.DEFAULT_INTERPTYPE)
-
-        pm.addAttr(rootControl, ln='autoPosition', at='double', min=0, max=1, hidden=False, k=True, defaultValue=True)
-        weightAliases = groundPlaneConstraint.getWeightAliasList()
-        oneMinusNode = pm.shadingNode("plusMinusAverage", asUtility=True)
-        oneMinusNode.setAttr("operation", 2)
-        pm.setAttr(oneMinusNode + ".input1D[0]", 1.0)  
-        pm.connectAttr(rootControl.name() + ".autoPosition", oneMinusNode + ".input1D[1]")
-        pm.connectAttr(oneMinusNode.name() + ".output1D", weightAliases[0])
-        pm.connectAttr(rootControl.name() + ".autoPosition", weightAliases[1])
-        pm.setAttr(rootControl + ".autoPosition", 0.0) # auto Position is disabled by default
-
-        return ikGrp, rootControl
-
-    def createMoveDirectionControl(self, exportRoot, group, conScale):
-
-        moveDirectionJoint = pm.joint(exportRoot, name="movedirection_ik")
-        moveDirectionChildJoint = pm.joint(moveDirectionJoint, name="movedirection_child_ik")
-        pm.xform(moveDirectionChildJoint, t=(0, 0, 4 * conScale))
-        moveDirectionControl, moveDirectionControlGrp = util.makeControl(moveDirectionJoint,
-                                                                         conScale * 2.0,
-                                                                         constrainObj=moveDirectionJoint,
-                                                                         pivotObj=group,
-                                                                         worldOrient=True,
-                                                                         shape=9,
-                                                                         controlSuffix='_EngineIKCON',
-                                                                         ctrlName='MoveDirection_EngineIKCON',
-                                                                         forwardAxis=pm.upAxis(q=True, axis=True).upper())
-
-        if group:
-            pm.parent(moveDirectionControlGrp, group)
-
-        pm.select(moveDirectionControl.name() + ".cv[1:2]", r=True)
-        pm.scale([0.4, 1, 1], r=True)
-
-        return moveDirectionControl
 
     # Added "useEngineIK" argument and Print statement along with moving everything under "if" statement - MM
     def cleanUpFootIKHierarchy(self, exportRoot, controlSize, rigGrp, mainCtrl, rootIKName="foot_root_ik", spaceSwitchList=None, useEngineIK=True):
@@ -1355,6 +1298,14 @@ class AutoRigUI(object):
 
         return jnt
 
+    def getRigNetwork(self):
+        nodeName = f'{self.rigName}_Network'
+        if pm.objExists(nodeName):
+            return pm.PyNode(nodeName)
+        else:
+            networkNode = pm.createNode('network', n=nodeName)
+            return networkNode
+
     def makeRig(self, args):
         util.printdebug("Making Rig")
 
@@ -1385,11 +1336,12 @@ class AutoRigUI(object):
                                          dismissString='No')
             if confirm == 'Yes':
                 util.deleteRig(rigCheck)  # I modified deleteRig to only take the name of the rig to be deleted - MM
-
             else:
                 util.printdebug("Making Rig: Cancelled")
                 return
-
+        # Make network node. We will connect all the modules to this 
+        rigNetwork = self.getRigNetwork()
+        
         # Get control size
         controlSize = cmds.floatSliderGrp(rigControlSizeSlider, q=True, value=True)
 
@@ -1406,6 +1358,7 @@ class AutoRigUI(object):
         pm.connectAttr(rigGrp.longName() + ".rigRoot", jnt.longName() + ".rigGroup")
         pm.addAttr(rigGrp, ln='evoRigVersion', dt='string', k=False)
         rigGrp.setAttr('evoRigVersion', __version__)
+        util.connectMessage(rigNetwork, 'rigGroup', rigGrp, 'mainNetwork')
         
         # Create Playblast cameras and frame the character. - ethanm
         # Creating now that rig is deleted so framing works more reliably. - ethanm
@@ -1525,18 +1478,62 @@ class AutoRigUI(object):
 
         spaceSwitchList = [mainCtrl, mainInnerCtrl, worldSpaceNode]  # ,hipjnt, , headjnt
 
-        # moveDirectionControl = self.createMoveDirectionControl(jnt, mainCtrl, controlSize)
-
         allControls = [mainCtrl, mainInnerCtrl]
         omittedControlShapes = []  # Omitted Ctrls Should Not Load Shapes - MM
+
+
 
         # Added "useEngineIK" variable/attribute and check along with print statement for clarification - MM
         makeArmEngineIK = any((x.engineIK for x in self.modules if hasattr(x, "_isArmCtrl") and hasattr(x, 'engineIK')))
         makeLegEngineIK = any((x.engineIK for x in self.modules if hasattr(x, "_isLegCtrl") and hasattr(x, 'engineIK')))
+        
+        footIKName = 'foot_root_ik'
+        footIKRoot = util.findInChain(jnt, footIKName)
+        if footIKRoot:
+            pm.delete(footIKRoot)
 
-        self.cleanUpFootIKHierarchy(jnt, controlSize, rigGrp, mainCtrl=mainCtrl, spaceSwitchList=spaceSwitchList, useEngineIK=makeLegEngineIK)
-        self.cleanUpFootIKHierarchy(jnt, controlSize, rigGrp, mainCtrl=mainCtrl, rootIKName="hand_root_ik", spaceSwitchList=spaceSwitchList, useEngineIK=makeArmEngineIK)
+        handIKName = 'hand_root_ik'
+        handIKRoot = util.findInChain(jnt, handIKName)
+        if handIKRoot:
+            pm.delete(handIKRoot)
 
+        # handIKName = None
+        # footIKName = None
+
+        # for m in self.modules:
+        #     if hasattr(m, "engineIK") and m.engineIK:
+        #         if getattr(m, "_isArmCtrl", False):
+        #             handIKName = f'{m.keyword}_root_ik'                
+        #         elif getattr(m, "_isLegCtrl", False):
+        #             footIKName = f'{m.keyword}_root_ik'
+
+        # makeArmEngineIK = handIKName is not None
+        # makeLegEngineIK = footIKName is not None
+        
+        ikRoots = []
+        for j in pm.listRelatives(jnt, ad=True, type=pm.nt.Joint):
+            if j.hasAttr('engineIKRoot'):
+                ikRoots.append(j)
+        pm.delete(ikRoots)
+
+        if makeLegEngineIK:
+            legEngineIKObj = cr_MakeEngineIK.engineIKCtrl()
+            legEngineIKObj.findAndCreate(jnt, 
+                                        spaceSwitchList, 
+                                        rigGrp, 
+                                        controlSize, 
+                                        mainCtrl, 
+                                        rootIKName=footIKName, 
+                                        rigNetwork=rigNetwork)
+        if makeArmEngineIK:
+            armEngineIKObj = cr_MakeEngineIK.engineIKCtrl()
+            armEngineIKObj.findAndCreate(jnt, 
+                                        spaceSwitchList, 
+                                        rigGrp, 
+                                        controlSize, 
+                                        mainCtrl, 
+                                        rootIKName=handIKName, 
+                                        rigNetwork=rigNetwork)
         useEngineIK = makeArmEngineIK or makeLegEngineIK
 
         print('-' * 60)
@@ -1547,13 +1544,19 @@ class AutoRigUI(object):
         print('-' * 60)
 
         hipJnt = self.findHipJoint(firstRigJnt)
-        rootGrp, rootControl = self.createRootControl(firstRigJnt, jnt, hipJnt, rigGrp, controlSize, spaceSwitchList)
-
+        rootControlObj = MakeRoot.rootCtrl()
+        rootGrp, rootControl = rootControlObj.findAndCreate(firstRigJnt, 
+                                                            spaceSwitchList, 
+                                                            rigGrp, 
+                                                            controlSize, 
+                                                            exportRoot=jnt, 
+                                                            hipJnt=hipJnt, 
+                                                            rigNetwork=rigNetwork)
         # Iterate through rig modules
+        
         for i, module in enumerate(self.modules):
 
             # ethanm - checks against keyword, jointlist, startjoint, and endjoint before bypassing creation.
-            # findObjects = cmds.ls('*' + module.keyword + '*')
             findObjects = (util.findAllInChain(firstRigJnt, module.keyword) or [])
             checkValidObjects = list(getattr(module, x) for x in ('keyword', 'jointList', 'startJoint', 'endJoint') if hasattr(module, x))
             if not any((findObjects + checkValidObjects)):
@@ -1565,7 +1568,6 @@ class AutoRigUI(object):
             if not module.useSpaceBlending:
                 moduleSpaceSwitchList = spaceSwitchList[:]
             moduleSpaceSwitchList += [x for x in [util.findInChain(firstRigJnt, s.name() + '_RigJnt') for s in module.spaces] if x]
-
             # Make Ctrls
             nodes = module.findAndCreate(firstRigJnt,
                                          group=rigGrp,
@@ -1573,7 +1575,8 @@ class AutoRigUI(object):
                                          controlSize=controlSize,
                                          mainCtrl=mainCtrl,
                                          leftPrefix=self.leftPrefix, 
-                                         rightPrefix=self.rightPrefix)
+                                         rightPrefix=self.rightPrefix,
+                                         rigNetwork=rigNetwork)
             allControls.extend(nodes or [])
 
             # Omitted Ctrls Should Not Load Shapes - MM
@@ -1584,7 +1587,7 @@ class AutoRigUI(object):
             pm.xform(allControls, t=[0, 0, 0], absolute=True)
         except:
             pass
-
+        
         # updated offset skeleton based on boneMod info
         if bool(boneModText):
             self.convertBoneMod()
@@ -1621,7 +1624,6 @@ class AutoRigUI(object):
 
         # Control Vis Layers on Main Ctrl
         self.setupControlLayers(mainCtrl, allControls)
-
         # Setup Selection Sets
         pm.sets(allControls, name=self.rigName + "_AllControls_set")
         # ctrlSet = pm.sets ("HumanRig_AllControls_set", q=True)
@@ -1644,6 +1646,10 @@ class AutoRigUI(object):
             allControls.extend(ctrlSet)
         else:
             pm.select(None)
+
+        for module in self.modules:
+            if module._label == 'Face':
+                module.finish_face_assembly(self.rigName)
 
         # Apply Saved Shape Data
         print('Apply Shapes:', self.applyShapeData)

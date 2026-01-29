@@ -658,101 +658,123 @@ def mirror(direction='selected'):
         logging.warning('At least one control must be selected')
         return
     
-    leftprefix = str(mc.textField( "nameLeftKeywordTextField", query=True, text=True))
-    rightprefix = str(mc.textField( "nameRightKeywordTextField", query=True, text=True))
-        
-    for a in sel:
-        src = str(a)
+    leftprefixes = [p.strip() for p in str(mc.textField( "nameLeftKeywordTextField", query=True, text=True)).split(",")]
+    rightprefixes = [p.strip() for p in str(mc.textField( "nameRightKeywordTextField", query=True, text=True)).split(",")]
+    mirrored = []
+    for leftprefix, rightprefix in list(zip(leftprefixes, rightprefixes)):
 
-        existsAlign = mc.attributeQuery("mirrorAlign", node=src, exists=True)
-        existsLeft = mc.attributeQuery("mirrorLeftAxisIndex", node=src, exists=True)
-
-        if existsAlign == False or existsLeft == False:
-            confirm = mc.confirmDialog(title='Confirm', 
-                                         message='Did not find mirror data on all controls. Cancelling operation.', 
-                                         button=['OK'], 
-                                         defaultButton='OK')
-            print("Did not find mirror data on all controls. You need to select all controls and initialize the mirroring system in bind pose first.")
-            return
-        
-        bSrcWasRight = False
-        #logging.debug('leftprefix is: '+leftprefix +' src is:'+ src)
-        shortSrc = src
-        nameSpace = False
-        if (shortSrc.find(':') > -1):
-            split =  src.split(':')
-            shortSrc = split[-1]
-            nameSpace = ':'.join(split[:-1])
-        dest = shortSrc
-            
-        if shortSrc.find(leftprefix) == 0:
-            dest = shortSrc.replace(leftprefix, rightprefix,1)
-        elif (shortSrc.find('_'+leftprefix) > 0):
-            dest = shortSrc.replace('_'+leftprefix, '_'+rightprefix,1)
-        elif shortSrc.find(rightprefix) == 0:
-            dest = shortSrc.replace(rightprefix, leftprefix,1)
-            bSrcWasRight = True
-        elif (shortSrc.find('_'+rightprefix) > 0):
-            dest = shortSrc.replace('_'+rightprefix, '_'+leftprefix,1)
-            bSrcWasRight = True
+        if leftprefix.startswith('_'):
+            check_start = False
         else:
-            bSrcWasCenter = True     
+            check_start = True
 
-        if nameSpace:
-            dest = ':'.join([nameSpace, dest])       
-
-
-        if direction == 'ltor':
-            if bSrcWasRight:
-                temp = dest
-                dest = src
-                src = temp
-        elif direction == 'rtol':
-            if bSrcWasRight==False:
-                temp = dest
-                dest = src
-                src = temp
-        elif direction == 'swap':
-            if bSrcWasRight:
-                if dest in sel:    #Prevent swapping twice if both sides are selected
-                    continue        #If swapping from right to left and destination was selected, skip
-
-        #print('-'*20)
-        #print("Mirroring " + src + " to: " + dest)
+        for a in sel:
+            src = str(a)
         
-        if (len(mc.ls(dest)) == 0):    #No destination control found
-            logging.warning('No destination control found: ' + dest)
-            continue
-        if (len(mc.ls(src)) == 0):    #No src control found
-            logging.warning('No source control found: ' + src)
-            continue
+            existsAlign = mc.attributeQuery("mirrorAlign", node=src, exists=True)
+            existsLeft = mc.attributeQuery("mirrorLeftAxisIndex", node=src, exists=True)
+
+            if existsAlign == False or existsLeft == False:
+                confirm = mc.confirmDialog(title='Confirm', 
+                                            message=f'Did not find mirror data on control: {a}. Cancelling operation.', 
+                                            button=['OK'], 
+                                            defaultButton='OK')
+                print(f"Did not find mirror data on control: {a}. You need to select all controls and initialize the mirroring system in bind pose first.")
+                return
             
-        #logging.debug('Copying from Source: ' + src + ' to Dest: ' + dest)
-        start, end = getStartAndEnd()
-        t = mc.currentTime(query=True)
-        pasteOption = 'replaceCompletely'
-        bCurrentFrame = mc.checkBox("nameCurrentFrameBox", query=True, value=True)
-        if bCurrentFrame:
-            start = t
-            end = t
-            pasteOption = 'merge'
-        
-        #autoKeyState = mc.autoKeyframe(query=True, state=True)
-        #mc.autoKeyframe(state=True)
+            bSrcWasRight = False
+            bSrcWasLeft = False
+            shortSrc = src
+            nameSpace = False
+            if (shortSrc.find(':') > -1):
+                split =  src.split(':')
+                shortSrc = split[-1]
+                nameSpace = ':'.join(split[:-1])
+            dest = shortSrc
 
-        if direction == 'swap':
-            if (dest.find(src) == -1):
-                #logging.debug('Source is not equal to destination')
-                swapAnim(src, dest, start, end, pasteOption)
-                mirrorScaleKey(src)
+            # Face rig has side indication in middle, but normally we should only be checking start
+            if not check_start:
+                if leftprefix in shortSrc:
+                    dest = shortSrc.replace(leftprefix, rightprefix, 1)
+                    bSrcWasLeft = True
+
+                elif rightprefix in shortSrc:
+                    dest = shortSrc.replace(rightprefix, leftprefix, 1)
+                    bSrcWasRight = True
             else:
-                copyPasteAnim(src, dest, start, end, pasteOption) #Create key in case there is none
-            mirrorScaleKey(dest)
-        else:
-            copyPasteAnim(src, dest, start, end, pasteOption)
-            mirrorScaleKey(dest)
+                if shortSrc.startswith(leftprefix):
+                    dest = shortSrc.replace(leftprefix, rightprefix, 1)
+                    bSrcWasLeft = True
 
-        #mc.autoKeyframe(state=autoKeyState)
+                elif shortSrc.startswith(rightprefix):
+                    dest = shortSrc.replace(rightprefix, leftprefix, 1)
+                    bSrcWasRight = True
+
+            if not bSrcWasRight and not bSrcWasLeft:
+                all_prefixes = leftprefixes + rightprefixes
+                check_prefixes = [x for x in all_prefixes if not x in [leftprefix, rightprefix]]
+                # Make sure actually center not just using other type of prefix
+                if any(p for p in check_prefixes if p and p in shortSrc):
+                    continue
+                else:
+                    # Make sure we don't go over node twice
+                    if not a in mirrored:
+                        bSrcWasCenter = True
+                        mirrored.append(a)
+                    else:
+                        continue
+
+            if nameSpace:
+                dest = ':'.join([nameSpace, dest])       
+
+            if direction == 'ltor':
+                if bSrcWasRight:
+                    temp = dest
+                    dest = src
+                    src = temp
+            elif direction == 'rtol':
+                if bSrcWasRight==False:
+                    temp = dest
+                    dest = src
+                    src = temp
+            elif direction == 'swap':
+                if bSrcWasRight:
+                    if dest in sel:    #Prevent swapping twice if both sides are selected
+                        continue        #If swapping from right to left and destination was selected, skip
+
+            if (len(mc.ls(dest)) == 0):    #No destination control found
+                logging.warning('No destination control found: ' + dest)
+                continue
+            if (len(mc.ls(src)) == 0):    #No src control found
+                logging.warning('No source control found: ' + src)
+                continue
+                
+            #logging.debug('Copying from Source: ' + src + ' to Dest: ' + dest)
+            start, end = getStartAndEnd()
+            t = mc.currentTime(query=True)
+            pasteOption = 'replaceCompletely'
+            bCurrentFrame = mc.checkBox("nameCurrentFrameBox", query=True, value=True)
+            if bCurrentFrame:
+                start = t
+                end = t
+                pasteOption = 'merge'
+            
+            #autoKeyState = mc.autoKeyframe(query=True, state=True)
+            #mc.autoKeyframe(state=True)
+
+            if direction == 'swap':
+                if (dest.find(src) == -1):
+                    #logging.debug('Source is not equal to destination')
+                    swapAnim(src, dest, start, end, pasteOption)
+                    mirrorScaleKey(src)
+                else:
+                    copyPasteAnim(src, dest, start, end, pasteOption) #Create key in case there is none
+                mirrorScaleKey(dest)
+            else:
+                copyPasteAnim(src, dest, start, end, pasteOption)
+                mirrorScaleKey(dest)
+
+            #mc.autoKeyframe(state=autoKeyState)
         
 def mirrorButton(args):
     mirror('selected')

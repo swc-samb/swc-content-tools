@@ -666,7 +666,7 @@ def fbxCleanup(filePath,
     #iterate through and make anything not a joint for removal later
     keep = od()
     remove = od()
-
+    
     hi_check = lambda x: '|'.join((n for n in str(x).split('|') if n))
     root = hi_check(root)
 
@@ -925,6 +925,9 @@ class nodeData(object):
         if not hasattr(self, 'currentFile'):
             self.currentFile = mc.file(q = True, sn = True)
 
+        if not hasattr(self, 'exclude'):
+            self.exclude = ''
+
         for attr in pm.listAttr(self._node, ud = True):
             object.__setattr__(self, attr, pickle.loads(self._node.getAttr(attr).encode()))
 
@@ -1038,6 +1041,8 @@ class AnimExporterUI(nodeData):
             self.playblastOnExport = 1
         if not hasattr(self, 'playblastCameras'):
             self.playblastCameras = ''
+        if not hasattr(self, 'exclude'):
+            self.exclude = ''
 
         self.__batch__ = kwargs.get('batch')
 
@@ -1297,12 +1302,11 @@ class AnimExporterUI(nodeData):
 
         name = kwargs.get('name') or name
         exportPath = os.path.join(folder, name + '.fbx').replace('\\','/')
-
         new = export(exportPath = exportPath, 
                      root=kwargs.get('root') or defaultRoot(),
                      start = start, end = end,
                      layers = list(map(str,layers)),
-                     layersLeaveAlone = not bool(layers),
+                     layersLeaveAlone = False,
                      _parent = self,
                      _index = self.numExports)
         new._write = True
@@ -1356,6 +1360,7 @@ class AnimExporterUI(nodeData):
                             layers = [layer],
                             _parent = self,
                             _index = self.numExports)
+
                 new._write = True
                 new.save()
                 self.numExports += 1
@@ -1424,7 +1429,7 @@ class AnimExporterUI(nodeData):
         # do the exports
         for item in exports:
             item.export(None, playblast=playblast_each)
-        
+
         # if playblast on export but has override cameras only playblast each overridde camera once
         if do_playblast and not playblast_each and self.playblastCameras:
             exports[0].playblast(playblast=True)
@@ -1471,9 +1476,9 @@ class export(object):
         self.exportPath = os.path.join(self._parent.folder, self.relativePath).replace('\\','/')
         self.folder = os.path.dirname(self.exportPath)
         self.name = os.path.basename(self.exportPath).split('.')[0]
-
         self.exportMesh = False
         self.exportBlendshapes = False
+        self.exclude = 'FACIAL_'
 
         for k,v in kwargs.items():
             setattr(self, k, v)            
@@ -1486,6 +1491,7 @@ class export(object):
 
     
     def __setattr__(self, attr, value):
+
         object.__setattr__(self, attr, value)
         if attr in ['_index', '_write'] or not self._write or '_' in attr or hasattr(value, '__call__'):
             return
@@ -1578,9 +1584,9 @@ class export(object):
                         parent = self)
 
         #root bone
-        rootColumn = pm.rowColumnLayout(nc=2, cw=[(1,self.width * 0.1), 
-                                                  (2,self.width * 0.01), 
-                                                  (2,self.width * 0.8)],   
+        rootColumn = pm.rowColumnLayout(nc=3, cw=[(1,self.width * 0.1), 
+                                                  (2,self.width * 0.4), 
+                                                  (3,self.width * 0.4)],   
                                         adjustableColumn = True,
                                         parent = self._main)
 
@@ -1598,7 +1604,13 @@ class export(object):
                                     attribute ='root', 
                                     textField = rootText))
 
-        
+        ExcludeLayout = pm.rowLayout(numberOfColumns=2, adjustableColumn = True, parent = rootColumn)
+        pm.text(label="Exclusion Keyword: ", parent=ExcludeLayout)
+        self.exclusion_textField = pm.textField('exclusion_textField', 
+                                                text=self.exclude, 
+                                                parent=ExcludeLayout,
+                                                changeCommand = partial(setattr, self, 'exclude'),
+                                                textChangedCommand = partial(setattr, self, 'exclude'))
 
         #Update Animation Layers
         layersColumn = pm.rowColumnLayout(nc=3, cw=[(1,int(self.width * 0.2)), 
@@ -1660,6 +1672,7 @@ class export(object):
         setEndCmd = partial(self.setFrameAttribute, attribute = 'end')     
         pm.textField(endText, edit = True, changeCommand = setEndCmd)
         pm.textField(endText, edit = True, textChangedCommand = setEndCmd)
+
 
 
         pm.button(frameCurrent, 
@@ -1812,7 +1825,7 @@ class export(object):
         kwargs['root'] = self.root
         kwargs['cameras'] = self._parent.playblastCameras or None
         playblast(*args,**kwargs)
-
+    
 
     def export(self, *args, **kwargs):
         '''Export Animation and remove namespaces'''
@@ -1820,7 +1833,7 @@ class export(object):
         hisort = lambda x: len(str(x.longName()).split('|'))
         root = (sorted(pm.ls(self.root), key=hisort) or [None])[0]
         print('Roots', sorted(pm.ls(self.root), key=hisort))
-     
+
         if not root:
             pm.warning('Anim Exporter Could not find Root "{}"'.format(self.root))
             return
@@ -1946,6 +1959,8 @@ class export(object):
         ml.eval('FBXProperty Export|IncludeGrp|Animation|PointCache -v false')
         ml.eval('FBXProperty Export|IncludeGrp|Animation|ConstraintsGrp|Constraint -v false')
         ml.eval('FBXProperty Export|IncludeGrp|Animation|ConstraintsGrp|Character -v false')
+        pm.mel.FBXExportIncludeChildren('-v', False)
+
 
 
         #some overrides for Unreal Upaxis
@@ -2002,9 +2017,14 @@ class export(object):
             else:
                 return
 
-        #export and remove namespaces
-        ml.eval('FBXExport -s 1 -f "{}"'.format(self.exportPath))
+        root_hi = pm.listRelatives(self.root, ad=True, type=pm.nt.Joint) + [pm.PyNode(self.root)]        
+        # Remove joints indicated for exclusion by user 
+        if self.exclude:
+            pm.select([x for x in root_hi if not self.exclude in x.name()], r=True)
+        else: 
+            pm.select(root_hi, r=True)
 
+        ml.eval('FBXExport -s 1 -f "{}"'.format(self.exportPath))
         print('Exported: "{}"'.format(self.exportPath))
         print(' - Extras:' + str(extras))
         fbxCleanup(self.exportPath, root=str(root), keep_list=extras)
@@ -2021,5 +2041,4 @@ class export(object):
         
         if mainControl and 'boneModSkeletonAttr' in locals():
             pm.setAttr(mainControl[0].name()+'.boneModSkeleton',boneModSkeletonAttr)
-
 
